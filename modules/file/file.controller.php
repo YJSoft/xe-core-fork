@@ -748,6 +748,12 @@ class fileController extends file
 			$file_info['name'] = base64_decode(strtr($match[1], ':', '/'));
 		}
 
+		// Normalize the decoded name, including legacy Firefox uploads.
+		$file_info['name'] = UploadFileFilter::sanitizeFilename($file_info['name']);
+		$file_info['extension'] = strtolower(pathinfo($file_info['name'], PATHINFO_EXTENSION));
+		$file_info['original_extension'] = $file_info['extension'];
+
+
 		if(!$manual_insert)
 		{
 			// Get the file configurations
@@ -788,8 +794,6 @@ class fileController extends file
 			}
 		}
 
-		// https://github.com/xpressengine/xe-core/issues/1713
-		$file_info['name'] = preg_replace('/\.((ph(p|t|ar)?[0-9]?|p?html?|cgi|pl|exe|(?:a|j)sp|inc).*)$/i', '$0-x',$file_info['name']);
 		$file_info['name'] = removeHackTag($file_info['name']);
 		$file_info['name'] = str_replace(array('<','>'),array('%3C','%3E'),$file_info['name']);
 		$file_info['name'] = str_replace('&amp;', '&', $file_info['name']);
