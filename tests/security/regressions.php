@@ -576,4 +576,5 @@ $api->dispBoardContentCommentList($response);
 check($response->get('oDocument') === null, 'Board API withholds inaccessible documents');
 check($response->get('file_list') === array(), 'Board API withholds inaccessible attachments');
 check($response->get('comment_list') === array(), 'Board API withholds inaccessible comments');
+require dirname(__FILE__) . '/advisories-2026.php';
 echo 'OK: ', $GLOBALS['checks'], ' security checks on PHP ', PHP_VERSION, "\n";
