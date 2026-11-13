@@ -37,6 +37,8 @@ class Context
     public static function getRequestUri() { return self::get('request_url'); }
     public static function isInstalled() { return true; }
     public static function getLang($key) { return $key; }
+    public static function addJsFilter($path, $file) {}
+    public static function loadLang($path) {}
 }
 class FileHandler
 {
@@ -577,4 +579,5 @@ check($response->get('oDocument') === null, 'Board API withholds inaccessible do
 check($response->get('file_list') === array(), 'Board API withholds inaccessible attachments');
 check($response->get('comment_list') === array(), 'Board API withholds inaccessible comments');
 require dirname(__FILE__) . '/advisories-2026.php';
+require dirname(__FILE__) . '/advisories-2026-november.php';
 echo 'OK: ', $GLOBALS['checks'], ' security checks on PHP ', PHP_VERSION, "\n";
