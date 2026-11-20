@@ -189,6 +189,8 @@ class documentController extends document
 	 * @param object $obj
 	 * @param bool $manual_inserted
 	 * @param bool $isRestore
+	 * @param bool $isLatest
+	 * @param bool $anonymous Optional trailing argument, kept out of the signature for subclass compatibility.
 	 * @return object
 	 */
 	function insertDocument($obj, $manual_inserted = false, $isRestore = false, $isLatest = true)
@@ -196,6 +198,11 @@ class documentController extends document
 		if(!$manual_inserted && !checkCSRF())
 		{
 			return new BaseObject(-1, 'msg_invalid_request');
+		}
+
+		if(!empty($obj->document_srl) && !$manual_inserted && !$isRestore && !checkUserSequence($obj->document_srl))
+		{
+			return new BaseObject(-1, 'msg_not_permitted');
 		}
 
 		// begin transaction
@@ -236,8 +243,14 @@ class documentController extends document
 		unset($obj->_saved_doc_message);
 
 		// Add the current user's info, unless it is a guest post
+		$anonymous = func_num_args() > 4 ? func_get_arg(4) === true
+			: (!$manual_inserted && !$isRestore && getModel('member')->isAnonymousBoard($obj->module_srl));
 		$logged_info = Context::get('logged_info');
-		if($logged_info->member_srl && !$manual_inserted && !$isRestore)
+		if($anonymous)
+		{
+			getModel('member')->anonymizeAuthor($obj, isset($logged_info->member_srl) ? $logged_info->member_srl : 0);
+		}
+		elseif($logged_info->member_srl && !$manual_inserted && !$isRestore)
 		{
 			$obj->member_srl = $logged_info->member_srl;
 			$obj->user_id = htmlspecialchars_decode($logged_info->user_id);
@@ -246,7 +259,7 @@ class documentController extends document
 			$obj->email_address = $logged_info->email_address;
 			$obj->homepage = $logged_info->homepage;
 		}
-		if(!$logged_info->member_srl && !$manual_inserted && !$isRestore)
+		elseif(!$logged_info->member_srl && !$manual_inserted && !$isRestore)
 		{
 			unset($obj->member_srl);
 			unset($obj->user_id);
@@ -262,7 +275,6 @@ class documentController extends document
 		if(!$output->toBool()) return $output;
 		// Register it if no given document_srl exists
 		if(!$obj->document_srl) $obj->document_srl = getNextSequence();
-		elseif(!$manual_inserted && !$isRestore && !checkUserSequence($obj->document_srl)) return new BaseObject(-1, 'msg_not_permitted');
 		if(!$manual_inserted && !$isRestore)
 		{
 			$oFileModel = getModel('file');
@@ -373,6 +385,7 @@ class documentController extends document
 	 * @param object $source_obj
 	 * @param object $obj
 	 * @param bool $manual_updated
+	 * @param bool $anonymous Optional trailing argument, kept out of the signature for subclass compatibility.
 	 * @return object
 	 */
 	function updateDocument($source_obj, $obj, $manual_updated = FALSE)
@@ -387,6 +400,9 @@ class documentController extends document
 		if(!$source_obj->document_srl || !$obj->document_srl) return new BaseObject(-1,'msg_invalied_request');
 		if(!$obj->status && $obj->is_secret == 'Y') $obj->status = 'SECRET';
 		if(!$obj->status) $obj->status = 'PUBLIC';
+
+		$anonymous = func_num_args() > 3 ? func_get_arg(3) === true
+			: (!$manual_updated && getModel('member')->isAnonymousBoard($source_obj->get('module_srl')));
 
 		// Preserve original author info.
 		if ($source_obj->get('member_srl'))
@@ -403,6 +419,16 @@ class documentController extends document
 		{
 			unset($obj->member_srl);
 			unset($obj->user_id);
+		}
+
+		if($anonymous)
+		{
+			getModel('member')->anonymizeStoredAuthor($obj, $source_obj);
+		}
+		elseif($obj->member_srl < 0)
+		{
+			$obj->email_address = $obj->homepage = $obj->user_id = '';
+			$obj->user_name = $obj->nick_name = 'anonymous';
 		}
 
 		// Call a trigger (before)
@@ -431,8 +457,8 @@ class documentController extends document
 			$args->document_srl = $obj->document_srl;
 			$args->module_srl = $module_srl;
 			if($document_config->use_history == 'Y') $args->content = $source_obj->get('content');
-			$args->nick_name = $source_obj->get('nick_name');
-			$args->member_srl = $source_obj->get('member_srl');
+			$args->nick_name = $anonymous ? $obj->nick_name : $source_obj->get('nick_name');
+			$args->member_srl = $anonymous ? $obj->member_srl : $source_obj->get('member_srl');
 			$args->regdate = $source_obj->get('last_update');
 			$args->ipaddress = $_SERVER['REMOTE_ADDR'];
 			$output = executeQuery("document.insertHistory", $args);
@@ -485,8 +511,8 @@ class documentController extends document
 			$obj->password = getModel('member')->hashPassword($obj->password);
 		}
 
-		// If an author is identical to the modifier or history is used, use the logged-in user's information.
-		if(Context::get('is_logged') && !$manual_updated)
+		// If an author is identical to the modifier, use the logged-in user's information.
+		if(Context::get('is_logged') && !$manual_updated && !$anonymous)
 		{
 			if($source_obj->get('member_srl')==$logged_info->member_srl)
 			{
@@ -499,7 +525,7 @@ class documentController extends document
 		}
 
 		// For the document written by logged-in user however no nick_name exists
-		if($source_obj->get('member_srl')&& !$obj->nick_name)
+		if(!$anonymous && $source_obj->get('member_srl') && !$obj->nick_name)
 		{
 			$obj->member_srl = $source_obj->get('member_srl');
 			$obj->user_name = $source_obj->get('user_name');
@@ -2428,16 +2454,32 @@ class documentController extends document
 	function procDocumentTempSave()
 	{
 		// Check login information
-		if(!Context::get('is_logged')) return new BaseObject(-1, 'msg_not_logged');
-		$module_info = Context::get('module_info');
 		$logged_info = Context::get('logged_info');
+		if(!Context::get('is_logged') || empty($logged_info->member_srl) || $logged_info->member_srl <= 0)
+		{
+			return new BaseObject(-1, 'msg_not_logged');
+		}
+		$module_info = $this->module_info;
+		if(empty($module_info->module_srl)) return new BaseObject(-1, 'msg_invalid_request');
+
+		if($module_info->module === 'board')
+		{
+			$grant = getModel('module')->getGrant($module_info, $logged_info);
+			if(empty($grant->access) || empty($grant->write_document)) return new BaseObject(-1, 'msg_not_permitted');
+		}
 
 		// Get form information
 		$obj = Context::getRequestVars();
-		// Change the target module to log-in information
+		$id = isset($obj->document_srl) && $obj->document_srl !== '' ? $obj->document_srl : 0;
+		if((!is_int($id) && !is_string($id)) || filter_var($id, FILTER_VALIDATE_INT) === false || $id < 0)
+		{
+			return new BaseObject(-1, 'msg_invalid_request');
+		}
+		$obj->document_srl = (int)$id;
 		$obj->module_srl = $module_info->module_srl;
 		$obj->status = $this->getConfigStatus('temp');
-		unset($obj->is_notice);
+		unset($obj->is_notice, $obj->extra_vars, $obj->password_is_hashed, $obj->list_order, $obj->ipaddress, $obj->uploaded_count);
+		if(!$this->grant->manager) unset($obj->title_color, $obj->title_bold);
 
 		// Extract from beginning part of contents in the guestbook
 		if(!$obj->title)
@@ -2447,13 +2489,14 @@ class documentController extends document
 
 		$oDocumentModel = getModel('document');
 		$oDocumentController = getController('document');
-		// Check if already exist geulinji
-		$oDocument = $oDocumentModel->getDocument($obj->document_srl, $this->grant->manager);
+
+		// Check if already exists
+		$oDocument = $oDocumentModel->getDocument($obj->document_srl);
 
 		// Update if already exists
 		if($oDocument->isExists() && $oDocument->document_srl == $obj->document_srl)
 		{
-			if($oDocument->get('module_srl') != $obj->module_srl)
+			if($oDocument->get('module_srl') != $obj->module_srl || $oDocument->get('status') !== $obj->status)
 			{
 				return new BaseObject(-1, 'msg_invalid_request');
 			}
@@ -2461,24 +2504,21 @@ class documentController extends document
 			{
 				return new BaseObject(-1, 'msg_invalid_request');
 			}
-			//if exist document status is already public, use temp status can point problem
-			$obj->status = $oDocument->get('status');
+			$obj->uploaded_count = getModel('file')->getFilesCount($obj->document_srl);
 			$output = $oDocumentController->updateDocument($oDocument, $obj);
-			$msg_code = 'success_updated';
-			// Otherwise, get a new
 		}
 		else
 		{
 			$output = $oDocumentController->insertDocument($obj);
-			$msg_code = 'success_registed';
-			$obj->document_srl = $output->get('document_srl');
-			$oDocument = $oDocumentModel->getDocument($obj->document_srl, $this->grant->manager);
 		}
-		// Set the attachment to be invalid state
-		if($oDocument->hasUploadedFiles())
+		if(!$output->toBool()) return $output;
+		$obj->document_srl = $output->get('document_srl');
+
+		// Only a successfully saved draft may change its attachments' validity.
+		if($obj->uploaded_count)
 		{
 			$args = new stdClass;
-			$args->upload_target_srl = $oDocument->document_srl;
+			$args->upload_target_srl = $obj->document_srl;
 			$args->isvalid = 'N';
 			executeQuery('file.updateFileValid', $args);
 		}
