@@ -135,18 +135,6 @@ class pageMobile extends pageView
 
 		return $page_content;
 	}
-
-	function _getOutsideContent()
-	{
-		// check if it is http or internal file
-		if($this->path)
-		{
-			if(preg_match("/^([a-z]+):\/\//i",$this->path)) $content = $this->getHtmlPage($this->path, $this->interval, $this->cache_file);
-			else $content = $this->executeFile($this->path, $this->interval, $this->cache_file);
-		}
-
-		return $content;
-	}
 }
 /* End of file page.mobile.php */
 /* Location: ./modules/page/page.mobile.php */
